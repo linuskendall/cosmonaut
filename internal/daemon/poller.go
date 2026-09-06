@@ -169,19 +169,29 @@ func (d *Daemon) releasePoll() {
 // runPoll is the actual refresh body. Caller must hold the in-flight
 // slot via tryAcquirePoll or acquirePoll.
 func (d *Daemon) runPoll() {
+	// A disabled provider is skipped outright: no CLI exec, no status
+	// row, and an empty workspace slice so its stale entries drop out
+	// of the tray/sidebar on the poll after it's turned off. ok stays
+	// true — "disabled" is not a transient failure to paper over.
 	var codespaces []codespace.Codespace
-	ghWorkspaces, ghOK := d.pollProvider(provider.NameGitHub, "gh", func(ctx context.Context) ([]provider.Workspace, error) {
-		cs, err := codespace.ListAllCodespacesCtx(ctx, d.Runner)
-		if err != nil {
-			return nil, err
-		}
-		codespaces = cs
-		return codespacesToWorkspaces(cs), nil
-	})
+	ghWorkspaces, ghOK := []provider.Workspace(nil), true
+	if d.Cfg.ProviderEnabled(provider.NameGitHub) {
+		ghWorkspaces, ghOK = d.pollProvider(provider.NameGitHub, "gh", func(ctx context.Context) ([]provider.Workspace, error) {
+			cs, err := codespace.ListAllCodespacesCtx(ctx, d.Runner)
+			if err != nil {
+				return nil, err
+			}
+			codespaces = cs
+			return codespacesToWorkspaces(cs), nil
+		})
+	}
 
-	coderWorkspaces, coderOK := d.pollProvider(provider.NameCoder, "coder", func(ctx context.Context) ([]provider.Workspace, error) {
-		return provider.NewCoderManager(d.Cfg).ListAllWorkspacesCtx(ctx)
-	})
+	coderWorkspaces, coderOK := []provider.Workspace(nil), true
+	if d.Cfg.ProviderEnabled(provider.NameCoder) {
+		coderWorkspaces, coderOK = d.pollProvider(provider.NameCoder, "coder", func(ctx context.Context) ([]provider.Workspace, error) {
+			return provider.NewCoderManager(d.Cfg).ListAllWorkspacesCtx(ctx)
+		})
+	}
 
 	oldCodespaces := d.Codespaces()
 	oldWorkspaces := d.Workspaces()

@@ -53,6 +53,9 @@ func RequireCommand(name string) error {
 }
 
 func NewManager(cfg *config.Config) (Manager, error) {
+	if name := cfg.EffectiveWorkspaceProvider(); !cfg.ProviderEnabled(name) {
+		return nil, fmt.Errorf("workspace provider %q is disabled in config (providers.%s.enabled)", name, name)
+	}
 	switch cfg.EffectiveWorkspaceProvider() {
 	case "", NameGitHub:
 		return NewGitHubManager(codespace.DefaultGHRunner{}), nil

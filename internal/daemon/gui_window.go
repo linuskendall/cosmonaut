@@ -115,7 +115,11 @@ func (uw *unifiedWindow) buildTree() *widget.Tree {
 		// childUIDs
 		func(id widget.TreeNodeID) []widget.TreeNodeID {
 			if id == "" {
-				return []widget.TreeNodeID{sectionNodeID(provider.NameGitHub), sectionNodeID(provider.NameCoder)}
+				sections := make([]widget.TreeNodeID, 0, len(allGUIProviders))
+				for _, name := range uw.daemon.guiProviders() {
+					sections = append(sections, sectionNodeID(name))
+				}
+				return sections
 			}
 			if isSectionNode(id) {
 				switch sectionFromNode(id) {

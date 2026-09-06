@@ -97,8 +97,8 @@ func (uw *unifiedWindow) showCosmoCodespaceDetail(csName, repo string) {
 	sshBtn := widget.NewButton("SSH", func() {
 		go func() {
 			sshAlias := fmt.Sprintf("cs.%s.github.dev", cs.Name)
-			useTmux := uw.daemon.Cfg.WorkspaceSSHTmux(provider.NameGitHub, cs.Name)
-			terminal.OpenSSHInTerminal(sshAlias, target.WorkspacePath, useTmux)
+			mux := uw.daemon.Cfg.WorkspaceSSHMultiplexer(provider.NameGitHub, cs.Name)
+			terminal.OpenSSHInTerminal(sshAlias, target.WorkspacePath, mux)
 			if uw.daemon.sessions != nil {
 				uw.daemon.sessions.TrackSession(sshAlias)
 			}

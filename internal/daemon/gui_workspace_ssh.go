@@ -7,6 +7,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/linuskendall/cosmonaut/internal/config"
 	"github.com/linuskendall/cosmonaut/internal/provider"
 	"github.com/linuskendall/cosmonaut/internal/sshconfig"
 )
@@ -18,7 +19,7 @@ import (
 // would be last-writer-wins across sibling workspaces.
 type workspaceSSHControls struct {
 	ShowControlMaster bool
-	ShowTmux          bool
+	ShowMultiplexer   bool
 	// SharedConfNote is a non-empty user-facing explanation when the
 	// ControlMaster toggle is hidden because the provider's SSH conf is
 	// shared across workspaces.
@@ -27,32 +28,32 @@ type workspaceSSHControls struct {
 
 // workspaceSSHControlsFor returns the set of SSH option controls that
 // should be rendered for a workspace from the given provider. Coder
-// hides ControlMaster (shared coder.conf) but keeps tmux (per-invocation
-// only); GitHub gets both.
+// hides ControlMaster (shared coder.conf) but keeps the multiplexer
+// selector (per-invocation only); GitHub gets both.
 func workspaceSSHControlsFor(providerName string) workspaceSSHControls {
 	switch providerName {
 	case provider.NameCoder:
 		return workspaceSSHControls{
 			ShowControlMaster: false,
-			ShowTmux:          true,
+			ShowMultiplexer:   true,
 			SharedConfNote:    "Coder workspaces share `~/.ssh/cosmonaut/coder.conf` — ControlMaster is managed globally and can't be toggled per workspace.",
 		}
 	default:
 		return workspaceSSHControls{
 			ShowControlMaster: true,
-			ShowTmux:          true,
+			ShowMultiplexer:   true,
 		}
 	}
 }
 
-// buildWorkspaceSSHSection renders the per-workspace SSH option toggles
-// (ControlMaster persistent connection, tmux session wrapping) for the
-// detail view of a single workspace.
+// buildWorkspaceSSHSection renders the per-workspace SSH option controls
+// (ControlMaster persistent connection, terminal multiplexer wrapping) for
+// the detail view of a single workspace.
 //
-// Both toggles write to Config.WorkspaceSSH keyed by provider:name, so each
-// workspace owns its own settings — toggling tmux on cs-A does not affect
-// cs-B. Defaults match the package-wide defaults: ControlMaster on, tmux
-// off.
+// Both controls write to Config.WorkspaceSSH keyed by provider:name, so each
+// workspace owns its own settings — changing the multiplexer on cs-A does
+// not affect cs-B. Defaults match the package-wide defaults: ControlMaster
+// on, multiplexer from the global SSH config (or none).
 //
 // For providers whose on-disk SSH conf is shared across workspaces (Coder),
 // the ControlMaster toggle is omitted in favour of an explanatory note —
@@ -90,18 +91,22 @@ func (uw *unifiedWindow) buildWorkspaceSSHSection(providerName, workspaceName st
 		items = append(items, container.NewPadded(mutedHint(controls.SharedConfNote)))
 	}
 
-	if controls.ShowTmux {
-		tmuxCheck := widget.NewCheck("Wrap shell in tmux", func(on bool) {
-			v := on
-			cfg.SetWorkspaceSSHTmux(providerName, workspaceName, &v)
+	if controls.ShowMultiplexer {
+		// Set the current value before wiring OnChanged: SetSelected fires
+		// the callback, and an unset workspace would otherwise get an
+		// explicit setting written just by opening the detail view.
+		muxSelect := widget.NewSelect(config.Multiplexers, nil)
+		muxSelect.SetSelected(cfg.WorkspaceSSHMultiplexer(providerName, workspaceName))
+		muxSelect.OnChanged = func(sel string) {
+			v := sel
+			cfg.SetWorkspaceSSHMultiplexer(providerName, workspaceName, &v)
 			uw.daemon.persistConfig()
 			if refresh != nil {
 				refresh()
 			}
-		})
-		tmuxCheck.SetChecked(cfg.WorkspaceSSHTmux(providerName, workspaceName))
-		tmuxHint := mutedHint("The SSH button (and `cosmonaut shell`) attach to a persistent tmux session that survives disconnects.")
-		items = append(items, tmuxCheck, container.NewPadded(tmuxHint))
+		}
+		muxHint := mutedHint("The SSH button (and `cosmonaut shell`) attach to a persistent tmux or zellij session that survives disconnects.")
+		items = append(items, widget.NewLabel("Terminal multiplexer"), muxSelect, container.NewPadded(muxHint))
 	}
 
 	return container.NewVBox(items...)

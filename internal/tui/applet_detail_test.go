@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/linuskendall/cosmonaut/internal/config"
 	"github.com/linuskendall/cosmonaut/internal/provider"
 )
 
@@ -13,10 +14,10 @@ import (
 func TestSSHOptionRowsForCoder(t *testing.T) {
 	rows := sshOptionRowsFor(provider.NameCoder)
 	if len(rows) != 1 {
-		t.Fatalf("Coder should expose exactly one SSH option (tmux), got %d rows: %#v", len(rows), rows)
+		t.Fatalf("Coder should expose exactly one SSH option (multiplexer), got %d rows: %#v", len(rows), rows)
 	}
-	if rows[0].kind != sshOptionTmux {
-		t.Fatalf("Coder's only SSH option should be tmux, got kind=%d", rows[0].kind)
+	if rows[0].kind != sshOptionMultiplexer {
+		t.Fatalf("Coder's only SSH option should be the multiplexer, got kind=%d", rows[0].kind)
 	}
 	note := sshOptionsSharedConfNote(provider.NameCoder)
 	if note == "" {
@@ -27,26 +28,46 @@ func TestSSHOptionRowsForCoder(t *testing.T) {
 	}
 }
 
-// TestSSHOptionRowsForGitHub asserts GitHub keeps both toggles. Each
+// TestSSHOptionRowsForGitHub asserts GitHub keeps both rows. Each
 // GitHub codespace has its own conf file so ControlMaster is coherent.
 func TestSSHOptionRowsForGitHub(t *testing.T) {
 	rows := sshOptionRowsFor(provider.NameGitHub)
 	if len(rows) != 2 {
 		t.Fatalf("GitHub should expose 2 SSH options, got %d", len(rows))
 	}
-	sawCM, sawTmux := false, false
+	sawCM, sawMux := false, false
 	for _, r := range rows {
 		switch r.kind {
 		case sshOptionControlMaster:
 			sawCM = true
-		case sshOptionTmux:
-			sawTmux = true
+		case sshOptionMultiplexer:
+			sawMux = true
 		}
 	}
-	if !sawCM || !sawTmux {
-		t.Fatalf("GitHub should have both ControlMaster and tmux rows, got %#v", rows)
+	if !sawCM || !sawMux {
+		t.Fatalf("GitHub should have both ControlMaster and multiplexer rows, got %#v", rows)
 	}
 	if sshOptionsSharedConfNote(provider.NameGitHub) != "" {
 		t.Fatalf("GitHub should not emit a shared-conf note")
+	}
+}
+
+// TestNextMultiplexer asserts a keypress cycles through every choice and
+// wraps, and that an unknown current value resets to none.
+func TestNextMultiplexer(t *testing.T) {
+	cur := config.MultiplexerNone
+	seen := map[string]bool{}
+	for range config.Multiplexers {
+		seen[cur] = true
+		cur = nextMultiplexer(cur)
+	}
+	if cur != config.MultiplexerNone {
+		t.Fatalf("cycle should wrap back to none, got %q", cur)
+	}
+	if len(seen) != len(config.Multiplexers) {
+		t.Fatalf("cycle should visit every multiplexer, saw %v", seen)
+	}
+	if got := nextMultiplexer("bogus"); got != config.MultiplexerNone {
+		t.Fatalf("unknown value should reset to none, got %q", got)
 	}
 }

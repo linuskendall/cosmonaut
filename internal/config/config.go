@@ -33,10 +33,47 @@ type Config struct {
 	Targets           map[string]Target `json:"targets"`
 	Daemon            *DaemonConfig     `json:"daemon,omitempty"`
 
+	// SSH holds SSH defaults that apply to every workspace unless a
+	// per-workspace WorkspaceSSH entry overrides them. Workspace names are
+	// often ephemeral (Coder workspaces come and go), so a declarative
+	// config wants one global knob rather than per-name entries.
+	SSH *SSHConfig `json:"ssh,omitempty"`
+
 	// WorkspaceSSH holds per-workspace SSH options keyed by "<provider>:<name>"
 	// (e.g. "github:cs-abc" or "coder:my-ws"). Unset workspaces fall back to
-	// the global defaults: ControlMaster on, Tmux off.
+	// the SSH defaults above, then to the built-ins: ControlMaster on, no
+	// multiplexer.
 	WorkspaceSSH map[string]WorkspaceSSHSettings `json:"workspaceSsh,omitempty"`
+}
+
+// Terminal multiplexer choices for the remote shell. The multiplexer keeps
+// the remote session alive across SSH drops; reconnecting re-attaches to it.
+const (
+	MultiplexerNone   = "none"
+	MultiplexerTmux   = "tmux"
+	MultiplexerZellij = "zellij"
+)
+
+// Multiplexers lists the valid multiplexer values in UI presentation order.
+var Multiplexers = []string{MultiplexerNone, MultiplexerTmux, MultiplexerZellij}
+
+// ValidMultiplexer reports whether s names a known multiplexer setting.
+func ValidMultiplexer(s string) bool {
+	switch s {
+	case MultiplexerNone, MultiplexerTmux, MultiplexerZellij:
+		return true
+	}
+	return false
+}
+
+// SSHConfig holds global SSH defaults, overridable per workspace via
+// WorkspaceSSH.
+type SSHConfig struct {
+	// Multiplexer wraps `cosmonaut shell` (and the GUI/TUI SSH buttons)
+	// in a persistent terminal multiplexer session on the remote:
+	// "tmux" (`tmux new -A -s cosmonaut`), "zellij"
+	// (`zellij attach --create cosmonaut`), or "none". Default: none.
+	Multiplexer string `json:"multiplexer,omitempty"`
 }
 
 // WorkspaceSSHSettings stores per-workspace SSH knobs. Each field is a pointer
@@ -47,9 +84,12 @@ type WorkspaceSSHSettings struct {
 	// so additional sessions to the same workspace reuse the existing TCP
 	// connection. Default: true.
 	ControlMaster *bool `json:"controlMaster,omitempty"`
-	// Tmux wraps `cosmonaut shell` (and the GUI's SSH button) in
-	// `tmux new -A -s cosmonaut` on the remote so the shell session
-	// survives SSH drops. Default: false.
+	// Multiplexer overrides the global SSH multiplexer for this
+	// workspace: "none", "tmux", or "zellij". See SSHConfig.Multiplexer.
+	Multiplexer *string `json:"multiplexer,omitempty"`
+	// Tmux is the legacy boolean form of Multiplexer (true == "tmux").
+	// Still parsed so existing configs keep working; Multiplexer wins
+	// when both are set, and writes clear this field.
 	Tmux *bool `json:"tmux,omitempty"`
 }
 
@@ -74,18 +114,31 @@ func (c *Config) WorkspaceSSHControlMaster(provider, name string) bool {
 	return true
 }
 
-// WorkspaceSSHTmux returns the resolved Tmux setting for a workspace, with
-// the default (false) applied when no explicit value is set.
-func (c *Config) WorkspaceSSHTmux(provider, name string) bool {
+// WorkspaceSSHMultiplexer returns the resolved multiplexer setting for a
+// workspace. Resolution order: the workspace's Multiplexer, its legacy Tmux
+// boolean, the global SSH default, then "none". Values outside the known
+// set are treated as unset.
+func (c *Config) WorkspaceSSHMultiplexer(provider, name string) string {
 	if c == nil {
-		return false
+		return MultiplexerNone
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if s, ok := c.WorkspaceSSH[WorkspaceSSHKey(provider, name)]; ok && s.Tmux != nil {
-		return *s.Tmux
+	if s, ok := c.WorkspaceSSH[WorkspaceSSHKey(provider, name)]; ok {
+		if s.Multiplexer != nil && ValidMultiplexer(*s.Multiplexer) {
+			return *s.Multiplexer
+		}
+		if s.Tmux != nil {
+			if *s.Tmux {
+				return MultiplexerTmux
+			}
+			return MultiplexerNone
+		}
 	}
-	return false
+	if c.SSH != nil && ValidMultiplexer(c.SSH.Multiplexer) {
+		return c.SSH.Multiplexer
+	}
+	return MultiplexerNone
 }
 
 // SetWorkspaceSSHControlMaster persists an explicit ControlMaster setting for
@@ -94,10 +147,15 @@ func (c *Config) SetWorkspaceSSHControlMaster(provider, name string, val *bool) 
 	c.setWorkspaceSSH(provider, name, func(s *WorkspaceSSHSettings) { s.ControlMaster = val })
 }
 
-// SetWorkspaceSSHTmux persists an explicit Tmux setting for a workspace.
-// Passing nil clears it (so the default applies).
-func (c *Config) SetWorkspaceSSHTmux(provider, name string, val *bool) {
-	c.setWorkspaceSSH(provider, name, func(s *WorkspaceSSHSettings) { s.Tmux = val })
+// SetWorkspaceSSHMultiplexer persists an explicit multiplexer setting for a
+// workspace. Passing nil clears it (so the global default applies). The
+// legacy Tmux boolean is cleared either way — it must not shadow the new
+// field, and once the user touches the setting the config is migrated.
+func (c *Config) SetWorkspaceSSHMultiplexer(provider, name string, val *string) {
+	c.setWorkspaceSSH(provider, name, func(s *WorkspaceSSHSettings) {
+		s.Multiplexer = val
+		s.Tmux = nil
+	})
 }
 
 func (c *Config) setWorkspaceSSH(provider, name string, mut func(*WorkspaceSSHSettings)) {
@@ -112,7 +170,7 @@ func (c *Config) setWorkspaceSSH(provider, name string, mut func(*WorkspaceSSHSe
 	}
 	s := c.WorkspaceSSH[key]
 	mut(&s)
-	if s.ControlMaster == nil && s.Tmux == nil {
+	if s.ControlMaster == nil && s.Tmux == nil && s.Multiplexer == nil {
 		delete(c.WorkspaceSSH, key)
 		if len(c.WorkspaceSSH) == 0 {
 			c.WorkspaceSSH = nil
@@ -234,6 +292,51 @@ func (c *Config) GetDefaultTarget() string {
 	return c.DefaultTarget
 }
 
+// ProviderEnabled reports whether the named provider ("github" or
+// "coder"; the config package can't import provider's Name constants
+// without a cycle) is enabled. Unset means enabled, so existing configs
+// keep today's both-providers behavior; unknown names report false.
+func (c *Config) ProviderEnabled(name string) bool {
+	if c == nil {
+		return true
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.providerEnabledLocked(name)
+}
+
+// providerEnabledLocked is the lock-free body of ProviderEnabled,
+// callable by methods that already hold c.mu.
+func (c *Config) providerEnabledLocked(name string) bool {
+	var enabled *bool
+	switch name {
+	case "github":
+		enabled = c.Providers.GitHub.Enabled
+	case "coder":
+		enabled = c.Providers.Coder.Enabled
+	default:
+		return false
+	}
+	return enabled == nil || *enabled
+}
+
+// SetProviderEnabled persists an explicit enabled/disabled state for a
+// provider. Passing nil clears it (so the default — enabled — applies).
+// Unknown provider names are ignored.
+func (c *Config) SetProviderEnabled(name string, val *bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch name {
+	case "github":
+		c.Providers.GitHub.Enabled = val
+	case "coder":
+		c.Providers.Coder.Enabled = val
+	}
+}
+
 // CoderOrganization returns Providers.Coder.Organization under the read lock.
 func (c *Config) CoderOrganization() string {
 	if c == nil {
@@ -305,9 +408,20 @@ type ProviderConfigs struct {
 	Coder  CoderProviderConfig  `json:"coder,omitempty"`
 }
 
-type GitHubProviderConfig struct{}
+type GitHubProviderConfig struct {
+	// Enabled turns the GitHub Codespaces provider on or off across the
+	// whole app: polling, tray section, GUI sidebar, auth prompts, and
+	// health checks. nil means enabled (the historical behavior), so a
+	// user who only works with Coder can set it to false and never see a
+	// "fix GitHub sign-in" nag for a token that lacks the codespace
+	// scope.
+	Enabled *bool `json:"enabled,omitempty"`
+}
 
 type CoderProviderConfig struct {
+	// Enabled mirrors GitHubProviderConfig.Enabled for the Coder
+	// provider. nil means enabled.
+	Enabled      *bool  `json:"enabled,omitempty"`
 	Organization string `json:"organization,omitempty"`
 }
 
@@ -409,7 +523,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	if cfg.WorkspaceProvider == "" {
-		cfg.WorkspaceProvider = "github"
+		cfg.WorkspaceProvider = cfg.EffectiveWorkspaceProvider()
 	}
 
 	return &cfg, nil
@@ -447,9 +561,15 @@ func (c *Config) EffectiveWorkspaceProvider() string {
 
 // effectiveWorkspaceProviderLocked is the lock-free body of
 // EffectiveWorkspaceProvider, callable by other methods that already hold
-// c.mu (read or write).
+// c.mu (read or write). When no provider is chosen explicitly the
+// default is github — unless github is disabled and coder isn't, in
+// which case a coder-only config works without also having to set
+// workspaceProvider.
 func (c *Config) effectiveWorkspaceProviderLocked() string {
 	if c == nil || c.WorkspaceProvider == "" {
+		if c != nil && !c.providerEnabledLocked("github") && c.providerEnabledLocked("coder") {
+			return "coder"
+		}
 		return "github"
 	}
 	return c.WorkspaceProvider

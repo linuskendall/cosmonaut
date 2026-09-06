@@ -58,9 +58,9 @@ func (uw *unifiedWindow) showCoderWorkspaceDetail(ws provider.Workspace) {
 	sshBtn := widget.NewButton("SSH", func() {
 		go func() {
 			sshAlias := fmt.Sprintf("%s.coder", ws.Name)
-			useTmux := uw.daemon.Cfg.WorkspaceSSHTmux(provider.NameCoder, ws.Name)
+			mux := uw.daemon.Cfg.WorkspaceSSHMultiplexer(provider.NameCoder, ws.Name)
 			workspacePath := provider.GuessWorkspacePath(target, &ws)
-			terminal.OpenSSHInTerminal(sshAlias, workspacePath, useTmux)
+			terminal.OpenSSHInTerminal(sshAlias, workspacePath, mux)
 			if uw.daemon.sessions != nil {
 				uw.daemon.sessions.TrackSession(sshAlias)
 			}

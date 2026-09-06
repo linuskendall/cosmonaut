@@ -108,8 +108,8 @@ func newCreateModel(d *AppletData) createModel {
 	// a hung CLI froze the whole TUI for up to 10 seconds when the user
 	// pressed "n". Auth problems still surface at submit with a clear
 	// error message.
-	gh := provider.HasGitHubCLI()
-	cd := provider.HasCoderCLI() && len(m.coderTargets) > 0
+	gh := provider.HasGitHubCLI() && d.cfg.ProviderEnabled(provider.NameGitHub)
+	cd := provider.HasCoderCLI() && len(m.coderTargets) > 0 && d.cfg.ProviderEnabled(provider.NameCoder)
 	switch {
 	case gh && cd:
 		m.providerName = provider.NameGitHub

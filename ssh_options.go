@@ -16,13 +16,14 @@ func resolveControlMaster(cfg *config.Config, providerName, workspaceName string
 	return cfg.WorkspaceSSHControlMaster(providerName, workspaceName)
 }
 
-// resolveTmux picks the tmux-wrap setting for a workspace: the per-invocation
-// override wins; otherwise the per-workspace config (defaulting to off) applies.
-func resolveTmux(cfg *config.Config, providerName, workspaceName string, override *bool) bool {
+// resolveMultiplexer picks the multiplexer setting for a workspace: the
+// per-invocation override wins; otherwise the per-workspace config (falling
+// back to the global default, then "none") applies.
+func resolveMultiplexer(cfg *config.Config, providerName, workspaceName string, override *string) string {
 	if override != nil {
 		return *override
 	}
-	return cfg.WorkspaceSSHTmux(providerName, workspaceName)
+	return cfg.WorkspaceSSHMultiplexer(providerName, workspaceName)
 }
 
 // syscallExec is split out so platforms without an `exec`-style replacement

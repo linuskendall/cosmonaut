@@ -28,13 +28,19 @@ var linuxTerminals = []string{"ghostty", "alacritty", "kitty", "gnome-terminal",
 // OpenSSHInTerminal opens an SSH session to the given alias in the user's
 // terminal emulator. workspacePath, if non-empty, is `cd`'d into before the
 // remote shell starts; it is POSIX-shell-quoted so paths with spaces, quotes,
-// or shell metacharacters are safe. When useTmux is true the remote command
-// is `tmux new -A -s cosmonaut`, so the shell survives an SSH drop and can
-// be re-attached by re-running the same command.
-func OpenSSHInTerminal(alias, workspacePath string, useTmux bool) {
+// or shell metacharacters are safe. multiplexer selects a persistent remote
+// session that survives SSH drops and is re-attached by re-running the same
+// command: "tmux" runs `tmux new -A -s cosmonaut`, "zellij" runs
+// `zellij attach --create cosmonaut`; any other value gets a plain login
+// shell. (Plain strings rather than config constants so this package stays
+// decoupled from internal/config.)
+func OpenSSHInTerminal(alias, workspacePath, multiplexer string) {
 	remoteCmd := "exec $SHELL -l"
-	if useTmux {
+	switch multiplexer {
+	case "tmux":
 		remoteCmd = "tmux new -A -s cosmonaut"
+	case "zellij":
+		remoteCmd = "zellij attach --create cosmonaut"
 	}
 	cdPrefix := ""
 	if workspacePath != "" {

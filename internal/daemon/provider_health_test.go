@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/linuskendall/cosmonaut/internal/config"
 	"github.com/linuskendall/cosmonaut/internal/provider"
 )
 
@@ -76,6 +77,22 @@ func TestAuthIssueMenuItem(t *testing.T) {
 		}
 	})
 
+	t.Run("disabled provider is ignored", func(t *testing.T) {
+		f := false
+		cfg := &config.Config{}
+		cfg.Providers.GitHub.Enabled = &f
+		d := &Daemon{
+			Cfg: cfg,
+			providerStatus: map[string]ProviderStatus{
+				provider.NameGitHub: {Available: true, Err: scopeErr, CheckedAt: now},
+				provider.NameCoder:  {Available: true, CheckedAt: now},
+			},
+		}
+		if item := d.authIssueMenuItem(); item != nil {
+			t.Fatalf("authIssueMenuItem() = %q, want nil when the failing provider is disabled", item.Label)
+		}
+	})
+
 	t.Run("both providers", func(t *testing.T) {
 		d := &Daemon{providerStatus: map[string]ProviderStatus{
 			provider.NameGitHub: {Available: true, Err: scopeErr, CheckedAt: now},
@@ -118,5 +135,26 @@ func TestGUICatalogSurfacesBothProviders(t *testing.T) {
 	}
 	if ghFailing {
 		t.Error("guiCatalog: gh-codespace-scope check failed despite no GitHub error")
+	}
+}
+
+// A disabled provider contributes no checks to the GUI catalog at all,
+// so its auth problems never surface in the Health section or banners.
+func TestGUICatalogSkipsDisabledProvider(t *testing.T) {
+	now := time.Now()
+	f := false
+	cfg := &config.Config{}
+	cfg.Providers.GitHub.Enabled = &f
+	d := &Daemon{
+		Cfg: cfg,
+		providerStatus: map[string]ProviderStatus{
+			provider.NameGitHub: {Available: true, Err: errors.New(`needs the "codespace" scope`), CheckedAt: now},
+		},
+	}
+
+	for _, c := range d.guiCatalog() {
+		if c.ID == "gh-codespace-scope" || c.ID == "gh-auth" || c.ID == "gh-cli" {
+			t.Errorf("guiCatalog: %s present despite the GitHub provider being disabled", c.ID)
+		}
 	}
 }

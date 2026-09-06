@@ -120,6 +120,9 @@ func (d *Daemon) buildTrayMenu() *fyne.Menu {
 }
 
 func (d *Daemon) githubCodespacesMenu() *fyne.MenuItem {
+	if !d.Cfg.ProviderEnabled(provider.NameGitHub) {
+		return nil
+	}
 	all := d.Codespaces()
 	// Use the poller's cached ProviderStatus, never a live
 	// provider.IsGitHubAvailable() probe: this runs inside fyne.Do on
@@ -204,6 +207,9 @@ func githubStatusMessage(status ProviderStatus) string {
 }
 
 func (d *Daemon) coderWorkspaceMenu() *fyne.MenuItem {
+	if !d.Cfg.ProviderEnabled(provider.NameCoder) {
+		return nil
+	}
 	workspaces := filterWorkspacesByProvider(d.Workspaces(), provider.NameCoder)
 	// Cached status only — see githubCodespacesMenu for why no live probe.
 	if len(workspaces) == 0 && !d.providerUsable(provider.NameCoder) {

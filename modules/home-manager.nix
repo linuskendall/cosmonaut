@@ -165,8 +165,16 @@ let
     defaultTarget = cfg.defaultTarget;
     workspaceProvider = cfg.workspaceProvider;
     editor = cfg.editor;
-    providers = filterNulls {
-      coder = lib.optionalAttrs (cfg.providers.coder.organization != null) {
+    ssh =
+      if cfg.ssh.multiplexer == null
+      then null
+      else { multiplexer = cfg.ssh.multiplexer; };
+    providers = lib.filterAttrs (_: v: v != { }) {
+      github = filterNulls {
+        enabled = cfg.providers.github.enable;
+      };
+      coder = filterNulls {
+        enabled = cfg.providers.coder.enable;
         organization = cfg.providers.coder.organization;
       };
     };
@@ -229,10 +237,41 @@ in
       description = "Workspace provider to use globally. Defaults to github.";
     };
 
+    providers.github.enable = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      description = ''
+        Whether the GitHub Codespaces provider is enabled. null (the
+        default) leaves it on; false hides its tray/GUI sections,
+        auth prompts, and health checks, and stops polling gh.
+      '';
+    };
+
+    providers.coder.enable = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      description = ''
+        Whether the Coder provider is enabled. null (the default)
+        leaves it on; false hides its tray/GUI sections and stops
+        polling the coder CLI.
+      '';
+    };
+
     providers.coder.organization = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = "Default Coder organization name or UUID.";
+    };
+
+    ssh.multiplexer = lib.mkOption {
+      type = lib.types.nullOr (lib.types.enum [ "none" "tmux" "zellij" ]);
+      default = null;
+      description = ''
+        Terminal multiplexer that `cosmonaut shell` and the GUI/TUI SSH
+        buttons attach to on the remote, so the session survives SSH
+        drops. Applies to every workspace unless overridden per
+        workspace in the app. null (the default) means none.
+      '';
     };
 
     targets = lib.mkOption {
@@ -250,7 +289,7 @@ in
 
       hotkey = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
-        default = if pkgs.stdenv.isDarwin then "Cmd+Shift+S" else "Ctrl+Shift+S";
+        default = if pkgs.stdenv.hostPlatform.isDarwin then "Cmd+Shift+S" else "Ctrl+Shift+S";
         description = "Global hotkey to open the codespace picker.";
       };
 
@@ -330,7 +369,7 @@ in
     # home.file with recursive=true creates per-file symlinks which macOS
     # does not recognise as a valid bundle. Instead, copy the whole .app
     # directory and strip the quarantine xattr so Gatekeeper accepts it.
-    home.activation.cosmonaut-app = lib.mkIf pkgs.stdenv.isDarwin
+    home.activation.cosmonaut-app = lib.mkIf pkgs.stdenv.hostPlatform.isDarwin
       (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         app_src="${wrappedPackage}/Applications/Cosmonaut.app"
         app_dst="$HOME/Applications/Cosmonaut.app"
@@ -341,7 +380,7 @@ in
       '');
 
     # macOS launchd agent for the daemon.
-    launchd.agents.cosmonaut-daemon = lib.mkIf (cfg.daemon.enable && pkgs.stdenv.isDarwin) {
+    launchd.agents.cosmonaut-daemon = lib.mkIf (cfg.daemon.enable && pkgs.stdenv.hostPlatform.isDarwin) {
       enable = true;
       config = {
         # Launch from the .app bundle so macOS associates the process
@@ -365,7 +404,7 @@ in
     };
 
     # Linux systemd user service for the daemon.
-    systemd.user.services.cosmonaut-daemon = lib.mkIf (cfg.daemon.enable && pkgs.stdenv.isLinux) {
+    systemd.user.services.cosmonaut-daemon = lib.mkIf (cfg.daemon.enable && pkgs.stdenv.hostPlatform.isLinux) {
       Unit = {
         Description = "cosmonaut background daemon";
         After = [ "graphical-session.target" ];

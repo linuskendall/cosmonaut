@@ -19,7 +19,8 @@ import (
 
 // shellCmd implements `cosmonaut shell [target]`. It opens an interactive SSH
 // session to the resolved workspace in the current terminal, optionally
-// wrapping it in `tmux new -A -s cosmonaut` so the shell survives SSH drops.
+// wrapping it in a persistent terminal multiplexer session (tmux or zellij)
+// so the shell survives SSH drops.
 //
 // Unlike the root `cosmonaut` command, shell doesn't touch editor config or
 // create workspaces — the workspace must already exist and be reachable.
@@ -28,6 +29,7 @@ import (
 func shellCmd(configPath *string) *cobra.Command {
 	var (
 		codespaceName string
+		multiplexer   string
 		tmux          bool
 		controlMaster bool
 	)
@@ -36,10 +38,10 @@ func shellCmd(configPath *string) *cobra.Command {
 		Short: "Open an SSH shell to a workspace",
 		Long: `Open an SSH shell to a workspace in the current terminal.
 
-With --tmux (or the per-workspace tmux setting), the remote shell runs inside
-a long-lived tmux session, so re-running this command reattaches to the same
-session after an SSH drop. ControlMaster multiplexing makes reconnects feel
-instant.`,
+With --multiplexer tmux or --multiplexer zellij (or the equivalent config
+setting), the remote shell runs inside a long-lived multiplexer session, so
+re-running this command reattaches to the same session after an SSH drop.
+ControlMaster multiplexing makes reconnects feel instant.`,
 		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -48,25 +50,38 @@ instant.`,
 			if len(args) > 0 {
 				targetName = args[0]
 			}
-			var tmuxOverride, cmOverride *bool
-			if cmd.Flags().Changed("tmux") {
-				v := tmux
-				tmuxOverride = &v
+			var muxOverride *string
+			var cmOverride *bool
+			switch {
+			case cmd.Flags().Changed("multiplexer"):
+				if !config.ValidMultiplexer(multiplexer) {
+					return fmt.Errorf("invalid --multiplexer %q (valid: %s)", multiplexer, strings.Join(config.Multiplexers, ", "))
+				}
+				v := multiplexer
+				muxOverride = &v
+			case cmd.Flags().Changed("tmux"):
+				v := config.MultiplexerNone
+				if tmux {
+					v = config.MultiplexerTmux
+				}
+				muxOverride = &v
 			}
 			if cmd.Flags().Changed("control-master") {
 				v := controlMaster
 				cmOverride = &v
 			}
-			return runShell(*configPath, targetName, codespaceName, tmuxOverride, cmOverride)
+			return runShell(*configPath, targetName, codespaceName, muxOverride, cmOverride)
 		},
 	}
 	cmd.Flags().StringVar(&codespaceName, "codespace", "", "specific workspace name, skipping selection")
+	cmd.Flags().StringVar(&multiplexer, "multiplexer", "none", "wrap the remote shell in a persistent multiplexer session (none, tmux, zellij)")
 	cmd.Flags().BoolVar(&tmux, "tmux", false, "wrap the remote shell in a persistent tmux session")
+	_ = cmd.Flags().MarkDeprecated("tmux", "use --multiplexer tmux")
 	cmd.Flags().BoolVar(&controlMaster, "control-master", true, "use SSH ControlMaster multiplexing for instant reconnects")
 	return cmd
 }
 
-func runShell(configPath, targetName, codespaceName string, tmuxOverride, controlMasterOverride *bool) error {
+func runShell(configPath, targetName, codespaceName string, muxOverride *string, controlMasterOverride *bool) error {
 	absConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
 		return err
@@ -145,8 +160,8 @@ func runShell(configPath, targetName, codespaceName string, tmuxOverride, contro
 	}
 
 	workspacePath := provider.GuessWorkspacePath(target, selected)
-	useTmux := resolveTmux(cfg, selected.Provider, selected.Name, tmuxOverride)
-	return execSSHShell(alias, workspacePath, useTmux)
+	mux := resolveMultiplexer(cfg, selected.Provider, selected.Name, muxOverride)
+	return execSSHShell(alias, workspacePath, mux)
 }
 
 // resolveShellTarget mirrors the root command's target resolution but skips
@@ -181,8 +196,8 @@ func resolveShellTarget(cfg *config.Config, targetName, codespaceName, providerN
 
 // execSSHShell replaces the current process with `ssh -t <alias> '<cmd>'`.
 // On success it never returns.
-func execSSHShell(alias, workspacePath string, useTmux bool) error {
-	remoteCmd := buildRemoteShellCommand(workspacePath, useTmux)
+func execSSHShell(alias, workspacePath, multiplexer string) error {
+	remoteCmd := buildRemoteShellCommand(workspacePath, multiplexer)
 	sshBin, err := exec.LookPath("ssh")
 	if err != nil {
 		return fmt.Errorf("ssh not found on PATH: %w", err)
@@ -192,16 +207,20 @@ func execSSHShell(alias, workspacePath string, useTmux bool) error {
 }
 
 // buildRemoteShellCommand returns the command to run on the remote.
-// When useTmux is true, attach to a long-lived session named "cosmonaut"
-// (creating it on first connect); the `-A` flag means `tmux new` attaches
-// to an existing session instead of erroring.
-func buildRemoteShellCommand(workspacePath string, useTmux bool) string {
+// With a multiplexer, attach to a long-lived session named "cosmonaut"
+// (creating it on first connect): tmux's `-A` flag makes `tmux new` attach
+// to an existing session instead of erroring, and zellij's
+// `attach --create` does the same.
+func buildRemoteShellCommand(workspacePath, multiplexer string) string {
 	cd := ""
 	if workspacePath != "" {
 		cd = fmt.Sprintf("cd %s && ", terminal.ShellQuote(workspacePath))
 	}
-	if useTmux {
+	switch multiplexer {
+	case config.MultiplexerTmux:
 		return cd + "tmux new -A -s cosmonaut"
+	case config.MultiplexerZellij:
+		return cd + "zellij attach --create cosmonaut"
 	}
 	return cd + "exec $SHELL -l"
 }

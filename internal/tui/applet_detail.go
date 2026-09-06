@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/linuskendall/cosmonaut/internal/codespace"
+	"github.com/linuskendall/cosmonaut/internal/config"
 	"github.com/linuskendall/cosmonaut/internal/editor"
 	"github.com/linuskendall/cosmonaut/internal/provider"
 	"github.com/linuskendall/cosmonaut/internal/sshconfig"
@@ -45,7 +46,7 @@ type sshOptionKind int
 
 const (
 	sshOptionControlMaster sshOptionKind = iota
-	sshOptionTmux
+	sshOptionMultiplexer
 )
 
 type sshOptionRow struct {
@@ -54,19 +55,20 @@ type sshOptionRow struct {
 	hint  string
 }
 
-// sshOptionRowsFor returns the SSH option toggles that should be shown
+// sshOptionRowsFor returns the SSH option rows that should be shown
 // for a workspace from the given provider. Coder hides ControlMaster
 // because all Coder workspaces share ~/.ssh/cosmonaut/coder.conf, so
-// toggling it per workspace is incoherent (last writer wins). Tmux is a
-// per-invocation wrapper around the SSH command and is safe everywhere.
+// toggling it per workspace is incoherent (last writer wins). The
+// multiplexer is a per-invocation wrapper around the SSH command and is
+// safe everywhere.
 func sshOptionRowsFor(providerName string) []sshOptionRow {
-	tmux := sshOptionRow{
-		kind:  sshOptionTmux,
-		label: "Wrap shell in tmux",
-		hint:  "SSH button and `cosmonaut shell` attach to a persistent tmux session.",
+	mux := sshOptionRow{
+		kind:  sshOptionMultiplexer,
+		label: "Terminal multiplexer",
+		hint:  "SSH button and `cosmonaut shell` attach to a persistent tmux/zellij session.",
 	}
 	if providerName == provider.NameCoder {
-		return []sshOptionRow{tmux}
+		return []sshOptionRow{mux}
 	}
 	return []sshOptionRow{
 		{
@@ -74,7 +76,7 @@ func sshOptionRowsFor(providerName string) []sshOptionRow {
 			label: "Persistent SSH (ControlMaster)",
 			hint:  "Multiplex extra sessions over one TCP connection — instant reconnects.",
 		},
-		tmux,
+		mux,
 	}
 }
 
@@ -240,14 +242,14 @@ func (m detailModel) activate(d *AppletData) (detailModel, tea.Cmd) {
 			// without waiting for the next PrepareSSH call.
 			m.applySSHOptionsAsync(d)
 			return m, emitFlash(fmt.Sprintf("ControlMaster %s", onOff(next)), false)
-		case sshOptionTmux:
-			cur := cfg.WorkspaceSSHTmux(m.workspace.Provider, m.workspace.Name)
-			next := !cur
-			cfg.SetWorkspaceSSHTmux(m.workspace.Provider, m.workspace.Name, &next)
+		case sshOptionMultiplexer:
+			cur := cfg.WorkspaceSSHMultiplexer(m.workspace.Provider, m.workspace.Name)
+			next := nextMultiplexer(cur)
+			cfg.SetWorkspaceSSHMultiplexer(m.workspace.Provider, m.workspace.Name, &next)
 			if err := d.PersistConfig(); err != nil {
 				return m, emitFlash("save: "+err.Error(), true)
 			}
-			return m, emitFlash(fmt.Sprintf("tmux %s", onOff(next)), false)
+			return m, emitFlash(fmt.Sprintf("multiplexer: %s", next), false)
 		}
 	case focusPorts:
 		return m.activatePort(d)
@@ -260,6 +262,17 @@ func onOff(b bool) string {
 		return "ON"
 	}
 	return "OFF"
+}
+
+// nextMultiplexer cycles through the multiplexer choices in order, so a
+// single keypress steps none → tmux → zellij → none.
+func nextMultiplexer(cur string) string {
+	for i, m := range config.Multiplexers {
+		if m == cur {
+			return config.Multiplexers[(i+1)%len(config.Multiplexers)]
+		}
+	}
+	return config.MultiplexerNone
 }
 
 func (m detailModel) applySSHOptionsAsync(d *AppletData) {
@@ -318,8 +331,8 @@ func (m detailModel) openSSHShell(d *AppletData) tea.Cmd {
 		if !ok {
 			return flashMsg{text: "no SSH config yet — open in editor first", err: true}
 		}
-		useTmux := d.Config().WorkspaceSSHTmux(m.workspace.Provider, m.workspace.Name)
-		go terminal.OpenSSHInTerminal(alias, m.guessWorkspacePath(), useTmux)
+		mux := d.Config().WorkspaceSSHMultiplexer(m.workspace.Provider, m.workspace.Name)
+		go terminal.OpenSSHInTerminal(alias, m.guessWorkspacePath(), mux)
 		return flashMsg{text: fmt.Sprintf("Opening shell to %s", alias)}
 	}
 }
@@ -459,16 +472,19 @@ func (m detailModel) renderOptionsGroup(d *AppletData) string {
 		if m.focus == focusOptions && i == m.optionsCursor {
 			cursor = cursorStyle.Render("> ")
 		}
-		var state bool
+		var box string
 		switch r.kind {
 		case sshOptionControlMaster:
-			state = cfg.WorkspaceSSHControlMaster(m.workspace.Provider, m.workspace.Name)
-		case sshOptionTmux:
-			state = cfg.WorkspaceSSHTmux(m.workspace.Provider, m.workspace.Name)
-		}
-		box := "[ ]"
-		if state {
-			box = stateOK.Render("[x]")
+			box = "[ ]"
+			if cfg.WorkspaceSSHControlMaster(m.workspace.Provider, m.workspace.Name) {
+				box = stateOK.Render("[x]")
+			}
+		case sshOptionMultiplexer:
+			mux := cfg.WorkspaceSSHMultiplexer(m.workspace.Provider, m.workspace.Name)
+			box = "[" + mux + "]"
+			if mux != config.MultiplexerNone {
+				box = stateOK.Render(box)
+			}
 		}
 		line := fmt.Sprintf("%s%s %s", cursor, box, r.label)
 		if m.focus == focusOptions && i == m.optionsCursor {

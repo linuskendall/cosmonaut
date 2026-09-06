@@ -10,10 +10,24 @@ import (
 	"github.com/linuskendall/cosmonaut/internal/provider"
 )
 
-// guiProviders is the set of providers whose auth health the GUI
-// surfaces (tray, banner, Health section) consider. Both are always
-// polled, so both can report an auth problem independently.
-var guiProviders = []string{provider.NameGitHub, provider.NameCoder}
+// allGUIProviders is the full set of providers the GUI surfaces (tray,
+// banner, Health section) know about. Which of them are actually polled
+// and rendered is gated per-provider by config — see guiProviders.
+var allGUIProviders = []string{provider.NameGitHub, provider.NameCoder}
+
+// guiProviders returns the providers that are enabled in config, in
+// display order. A disabled provider is invisible to every GUI surface:
+// not polled, no tray section, no sidebar section, no auth checks — so
+// a Coder-only user is never nagged to fix GitHub sign-in.
+func (d *Daemon) guiProviders() []string {
+	enabled := make([]string, 0, len(allGUIProviders))
+	for _, name := range allGUIProviders {
+		if d.Cfg.ProviderEnabled(name) {
+			enabled = append(enabled, name)
+		}
+	}
+	return enabled
+}
 
 // providerListErr returns a supplier of the named provider's most recent
 // cached list error. Backed by the per-provider ProviderStatus the
@@ -31,8 +45,8 @@ func (d *Daemon) providerListErr(name string) func() error {
 // scope problem surface side by side. Each check stays silent unless its
 // provider actually has the matching error.
 func (d *Daemon) guiCatalog() []doctor.Check {
-	providers := make([]doctor.ProviderListErr, 0, len(guiProviders))
-	for _, name := range guiProviders {
+	providers := make([]doctor.ProviderListErr, 0, len(allGUIProviders))
+	for _, name := range d.guiProviders() {
 		providers = append(providers, doctor.ProviderListErr{
 			Name:    name,
 			ListErr: d.providerListErr(name),
@@ -70,7 +84,7 @@ func (d *Daemon) providerHasAuthIssue(name string) bool {
 // provider has an auth issue.
 func (d *Daemon) authIssueMenuItem() *fyne.MenuItem {
 	var names []string
-	for _, name := range guiProviders {
+	for _, name := range d.guiProviders() {
 		if d.providerHasAuthIssue(name) {
 			names = append(names, providerDisplayName(name))
 		}

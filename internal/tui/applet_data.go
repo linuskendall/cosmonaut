@@ -122,9 +122,14 @@ func (d *AppletData) StatusFor(name string) ProviderStatus {
 // GitHub scope problem surface independently rather than only the
 // effective provider's.
 func (d *AppletData) HealthCatalog() []doctor.Check {
-	providers := []doctor.ProviderListErr{
-		{Name: provider.NameGitHub, ListErr: d.providerListErr(provider.NameGitHub)},
-		{Name: provider.NameCoder, ListErr: d.providerListErr(provider.NameCoder)},
+	var providers []doctor.ProviderListErr
+	for _, name := range []string{provider.NameGitHub, provider.NameCoder} {
+		if !d.cfg.ProviderEnabled(name) {
+			continue
+		}
+		providers = append(providers, doctor.ProviderListErr{
+			Name: name, ListErr: d.providerListErr(name),
+		})
 	}
 	return doctor.CatalogForProviders(providers...)
 }
@@ -190,7 +195,7 @@ func (d *AppletData) Poll() PollResult {
 	var combined []provider.Workspace
 	var firstErr error
 
-	if provider.IsGitHubAvailable() {
+	if d.cfg.ProviderEnabled(provider.NameGitHub) && provider.IsGitHubAvailable() {
 		ws, cs, err := d.pollGitHub()
 		d.setProviderStatus(provider.NameGitHub, "gh", err)
 		if err != nil && firstErr == nil {
@@ -201,7 +206,7 @@ func (d *AppletData) Poll() PollResult {
 		d.mu.Unlock()
 		combined = append(combined, ws...)
 	}
-	if provider.IsCoderAvailable() {
+	if d.cfg.ProviderEnabled(provider.NameCoder) && provider.IsCoderAvailable() {
 		ws, err := d.pollCoder()
 		d.setProviderStatus(provider.NameCoder, "coder", err)
 		if err != nil && firstErr == nil {

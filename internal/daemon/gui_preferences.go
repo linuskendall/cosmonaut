@@ -16,6 +16,7 @@ import (
 	"github.com/linuskendall/cosmonaut/internal/codespace"
 	"github.com/linuskendall/cosmonaut/internal/config"
 	"github.com/linuskendall/cosmonaut/internal/doctor"
+	"github.com/linuskendall/cosmonaut/internal/provider"
 	"github.com/linuskendall/cosmonaut/internal/terminal"
 )
 
@@ -33,9 +34,15 @@ func (d *Daemon) buildSettingsPanel(win fyne.Window) fyne.CanvasObject {
 	items = append(items, d.buildHealthSection(win))
 	items = append(items, widget.NewSeparator())
 
-	// GitHub auth section.
-	items = append(items, d.buildAuthSection(win))
+	// Provider enable/disable toggles.
+	items = append(items, d.buildProvidersSection(win))
 	items = append(items, widget.NewSeparator())
+
+	// GitHub auth section — pointless when the provider is disabled.
+	if d.Cfg.ProviderEnabled(provider.NameGitHub) {
+		items = append(items, d.buildAuthSection(win))
+		items = append(items, widget.NewSeparator())
+	}
 
 	// Editor selection.
 	items = append(items, d.buildEditorSection())
@@ -228,6 +235,42 @@ func (d *Daemon) refreshMainWindowBanner() {
 	if uw := d.activeUnifiedWindow(); uw != nil {
 		uw.refreshBanner()
 	}
+}
+
+// buildProvidersSection renders one enable/disable checkbox per known
+// provider. Disabling a provider hides every surface it owns (tray
+// section, sidebar section, auth prompts, health checks) and stops
+// polling its CLI — the escape hatch for users who only ever use one of
+// the two. The last enabled provider's checkbox is disabled so the app
+// can't be talked into showing nothing at all.
+func (d *Daemon) buildProvidersSection(win fyne.Window) fyne.CanvasObject {
+	heading := widget.NewLabel("Providers")
+	heading.TextStyle = fyne.TextStyle{Bold: true}
+
+	refresh := func() {
+		d.persistConfig()
+		d.forcePollAsync(nil)
+		if win != nil {
+			win.SetContent(d.buildSettingsPanel(win))
+		}
+	}
+
+	rows := []fyne.CanvasObject{heading}
+	enabledCount := len(d.guiProviders())
+	for _, name := range allGUIProviders {
+		name := name
+		enabled := d.Cfg.ProviderEnabled(name)
+		check := widget.NewCheck(providerDisplayName(name), func(v bool) {
+			d.Cfg.SetProviderEnabled(name, &v)
+			refresh()
+		})
+		check.SetChecked(enabled)
+		if enabled && enabledCount == 1 {
+			check.Disable()
+		}
+		rows = append(rows, check)
+	}
+	return container.NewVBox(rows...)
 }
 
 func (d *Daemon) buildAuthSection(win fyne.Window) fyne.CanvasObject {

@@ -31,7 +31,7 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        cgoLinuxLibs = pkgs.lib.optionals pkgs.stdenv.isLinux [
+        cgoLinuxLibs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
           pkgs.gtk3
           pkgs.libappindicator-gtk3
           pkgs.libGL
@@ -67,7 +67,7 @@
           # cctools ld (the darwin stdenv default) segfaults linking the
           # fyne/objc-heavy binary against nixpkgs >= 26.11's clang 21 / Go 1.26
           # toolchain. lld links it fine.
-          ldflags = pkgs.lib.optionals pkgs.stdenv.isDarwin [
+          ldflags = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
             "-extldflags=-fuse-ld=lld"
           ];
 
@@ -75,22 +75,22 @@
             pkgs.makeWrapper
             pkgs.installShellFiles
             pkgs.pkg-config
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+          ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             pkgs.xvfb-run
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
+          ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
             pkgs.lld
           ];
 
           checkPhase = ''
             runHook preCheck
             export GOFLAGS=''${GOFLAGS//-trimpath/}
-            ${pkgs.lib.optionalString pkgs.stdenv.isLinux "xvfb-run -a "}go test -tags=netgo ${
-              pkgs.lib.optionalString pkgs.stdenv.isDarwin ''-ldflags="-extldflags=-fuse-ld=lld" ''
+            ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux "xvfb-run -a "}go test -tags=netgo ${
+              pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''-ldflags="-extldflags=-fuse-ld=lld" ''
             }./...
             runHook postCheck
           '';
 
-          buildInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin [
+          buildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
             pkgs.apple-sdk
           ] ++ cgoLinuxLibs;
 
@@ -109,7 +109,7 @@
 
             install -Dm644 $src/dist/cosmonaut.config.example.json $out/share/cosmonaut/cosmonaut.config.example.json
             install -Dm644 $src/dist/cosmonaut.service $out/share/cosmonaut/cosmonaut.service
-          '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+          '' + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
             mkdir -p "$out/Applications/Cosmonaut.app/Contents/MacOS"
             mkdir -p "$out/Applications/Cosmonaut.app/Contents/Resources"
             cp $src/dist/Info.plist "$out/Applications/Cosmonaut.app/Contents/Info.plist"
@@ -139,7 +139,7 @@
           version = pkgs.lib.removePrefix "v" release.tag;
 
           src =
-            if pkgs.stdenv.isLinux then
+            if pkgs.stdenv.hostPlatform.isLinux then
               pkgs.fetchurl {
                 url = "https://github.com/${release.owner}/${release.repo}/releases/download/${release.tag}/cosmonaut-amd64.tar.gz";
                 sha256 = release.linuxSha;
@@ -152,7 +152,7 @@
 
           nativeBuildInputs = [
             pkgs.makeWrapper
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+          ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             pkgs.autoPatchelfHook
           ];
 
@@ -161,7 +161,7 @@
           dontBuild = true;
 
           installPhase =
-            if pkgs.stdenv.isLinux then ''
+            if pkgs.stdenv.hostPlatform.isLinux then ''
               runHook preInstall
               install -Dm755 cosmonaut/cosmonaut $out/bin/cosmonaut
               install -Dm644 cosmonaut/cosmonaut.config.example.json \
@@ -188,7 +188,7 @@
           };
         };
 
-        cgoEnvSetup = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        cgoEnvSetup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
           export PKG_CONFIG_PATH="${cgoLinuxPkgConfigPath}:''${PKG_CONFIG_PATH:-}"
           export CGO_CFLAGS="${cgoLinuxCFLAGS} ''${CGO_CFLAGS:-}"
           export CGO_LDFLAGS="${cgoLinuxLDFLAGS} ''${CGO_LDFLAGS:-}"
@@ -197,7 +197,7 @@
         cosmonautLint = pkgs.writeShellApplication {
           name = "cosmonaut-lint";
           runtimeInputs = [ pkgs.go pkgs.gofumpt pkgs.golangci-lint ]
-            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+            ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.pkg-config
               pkgs.stdenv.cc
             ];
@@ -215,12 +215,12 @@
 
         cosmonautTest = pkgs.writeShellApplication {
           name = "cosmonaut-test";
-          runtimeInputs = [ pkgs.go ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+          runtimeInputs = [ pkgs.go ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             pkgs.xvfb-run
             pkgs.pkg-config
             pkgs.stdenv.cc
           ];
-          text = cgoEnvSetup + (if pkgs.stdenv.isLinux then ''
+          text = cgoEnvSetup + (if pkgs.stdenv.hostPlatform.isLinux then ''
             exec xvfb-run -a go test ./...
           '' else ''
             exec go test ./...
@@ -244,7 +244,7 @@
         // pkgs.lib.optionalAttrs (system == "x86_64-linux" || system == "aarch64-darwin") {
           cosmonaut-prebuilt = cosmonautPrebuilt;
         }
-        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           appimage = nix-appimage.lib.${system}.mkAppImage {
             # Pointing to wrapped script to keep gh in PATH
             program = "${cosmonautFromSource}/bin/cosmonaut";
@@ -279,7 +279,7 @@
             pkgs.goreleaser
             pkgs.cosign
             pkgs.nix
-          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+          ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
             pkgs.gtk3
             pkgs.libappindicator-gtk3
             pkgs.libGL
